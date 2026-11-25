@@ -234,3 +234,18 @@ Paseo is an independent project used by tens of thousands of developers daily, b
 ## License
 
 Apache-2.0
+
+## About this fork
+
+This fork diverges from upstream `getpaseo/paseo` with the following change:
+
+### Disabled background provider catalog refresh
+
+Upstream v0.17.2 (PR #10481) introduced a 30-minute background timer that re-probes every enabled provider across remembered workspace directories.
+Because Paseo acts as a wrapper layer over external agent CLIs, launching those binaries without user action triggers uncontrolled side effects:
+
+- ACP providers such as Antigravity (`agy`) persist every probe session to `~/.gemini/antigravity-cli/conversations/` and prune history to the newest 500 trajectories on startup, which evicts real conversations.
+- Claude probes cold-start Claude Code, triggering background network requests (telemetry and token refresh) while idle.
+
+**Change:** Removed the `backgroundRefresh` schedule option in `packages/server/src/server/bootstrap.ts`.
+Provider catalogs are now discovered on first use and refreshed only when the user asks.
