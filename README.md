@@ -247,5 +247,5 @@ Because Paseo acts as a wrapper layer over external agent CLIs, launching those 
 - ACP providers such as Antigravity (`agy`) persist every probe session to `~/.gemini/antigravity-cli/conversations/` and prune history to the newest 500 trajectories on startup, which evicts real conversations.
 - Claude probes cold-start Claude Code, triggering background network requests (telemetry and token refresh) while idle.
 
-**Change:** Removed the `backgroundRefresh` schedule option in `packages/server/src/server/bootstrap.ts`.
+**Change:** Removed the background refresh scheduler (`packages/server/src/server/agent/provider-refresh-schedule.ts`), its tests, and its wiring in `packages/server/src/server/bootstrap.ts` and `packages/server/src/server/agent/provider-snapshot-manager.ts`.
 Provider catalogs are now discovered on first use and refreshed only when the user asks.
