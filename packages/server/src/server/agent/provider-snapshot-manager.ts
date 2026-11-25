@@ -293,8 +293,11 @@ export class ProviderSnapshotManager {
       options.diagnosticTimeoutMs,
       this.refreshTimeoutMs,
     );
+    // FORK(plugin-extends): plugins have not registered yet, so defer extends of a plugin base.
     this.generation = this.createGeneration(
-      this.buildRegistry(this.runtimeSettings, this.providerOverrides),
+      this.buildRegistry(this.runtimeSettings, this.providerOverrides, {
+        deferUnresolvedExtends: true,
+      }),
       this.providerOverrides,
     );
     this.providerClients = {
@@ -436,7 +439,14 @@ export class ProviderSnapshotManager {
   private warnUnknownProviderOverrides(): void {
     if (!this.pluginProvidersSettled) return;
     for (const [provider, override] of Object.entries(this.providerOverrides ?? {})) {
-      if (!override.extends && !this.generation.definitions[provider]) {
+      if (this.generation.definitions[provider]) continue;
+      // FORK(plugin-extends): a deferred extends whose base never registered.
+      if (override.extends) {
+        this.logger.warn(
+          { provider, extends: override.extends },
+          "Custom provider extends no registered provider",
+        );
+      } else {
         this.logger.warn({ provider }, "Provider override matches no registered provider");
       }
     }
@@ -456,19 +466,25 @@ export class ProviderSnapshotManager {
     this.createAgentManagerState(this.generation.definitions, clients);
     this.pluginProviders.replace(registrations);
     const plugins = this.pluginProviders.definitions();
-    const retiredProviders = Object.keys(previousPlugins).filter(
-      (provider) =>
-        previousPlugins[provider] !== plugins[provider] &&
-        !this.providerOverrides?.[provider]?.extends,
-    );
-    const definitions = this.buildRegistry(this.runtimeSettings, this.providerOverrides);
+    // FORK(plugin-extends): a derived provider is retired and rebuilt with its plugin base;
+    // its own configuration is unchanged, so it would otherwise keep the replaced runtime.
+    const pluginChanged = (id: string | null | undefined): boolean =>
+      Boolean(id && previousPlugins[id] !== plugins[id] && !this.providerOverrides?.[id]?.extends);
+    const retiredProviders = Object.keys(this.generation.definitions).filter((provider) => {
+      const before = this.generation.definitions[provider];
+      return pluginChanged(provider) || pluginChanged(before?.derivedFromProviderId);
+    });
+    const definitions = this.buildRegistry(this.runtimeSettings, this.providerOverrides, {
+      deferUnresolvedExtends: true,
+    });
     const changed = new Set<AgentProvider>();
     for (const provider of new Set([...this.generation.order, ...Object.keys(definitions)])) {
       const before = this.generation.definitions[provider];
       const after = definitions[provider];
       const registrationChanged =
-        previousPlugins[provider] !== plugins[provider] &&
-        !this.providerOverrides?.[provider]?.extends;
+        pluginChanged(provider) ||
+        pluginChanged(before?.derivedFromProviderId) ||
+        pluginChanged(after?.derivedFromProviderId);
       if (
         registrationChanged ||
         !before ||
@@ -869,11 +885,13 @@ export class ProviderSnapshotManager {
   private buildRegistry(
     runtimeSettings: AgentProviderRuntimeSettingsMap | undefined,
     providerOverrides: Record<string, ProviderOverride> | undefined,
+    buildOptions?: { deferUnresolvedExtends?: boolean },
   ): Record<AgentProvider, ProviderDefinition> {
     const registry = buildProviderRegistry(this.logger, {
       runtimeSettings,
       providerOverrides,
       pluginProviders: this.pluginProviders.definitions(),
+      deferUnresolvedExtends: buildOptions?.deferUnresolvedExtends,
       workspaceGitService: this.workspaceGitService,
       managedProcesses: this.managedProcesses,
       openCodeBridge: this.openCodeBridge,

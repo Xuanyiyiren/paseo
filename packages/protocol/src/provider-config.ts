@@ -72,7 +72,8 @@ export const ProviderOverridesSchema = z
   .record(z.string(), ProviderOverrideSchema)
   .superRefine((providers, ctx) => {
     const builtinProviderIdSet = new Set<string>(BUILTIN_PROVIDER_IDS);
-    const validExtendsValues = new Set<string>([...BUILTIN_PROVIDER_IDS, "acp"]);
+    // FORK(plugin-extends): allow extending the antigravity plugin; add other plugin IDs here.
+    const validExtendsValues = new Set<string>([...BUILTIN_PROVIDER_IDS, "acp", "antigravity"]);
 
     for (const [providerId, provider] of Object.entries(providers)) {
       if (!PROVIDER_ID_PATTERN.test(providerId)) {

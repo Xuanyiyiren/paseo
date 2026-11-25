@@ -237,7 +237,10 @@ Apache-2.0
 
 ## About this fork
 
-This fork diverges from upstream `getpaseo/paseo` with the following change:
+This fork diverges from upstream `getpaseo/paseo` with the following changes:
+
+Code changes that must survive an upstream rebase are tagged `// FORK(<name>): <why>`; run `rg "FORK\("` to list them.
+Removed upstream code has no tag.
 
 ### Disabled background provider catalog refresh
 
@@ -249,3 +252,12 @@ Because Paseo acts as a wrapper layer over external agent CLIs, launching those 
 
 **Change:** Removed the background refresh scheduler (`packages/server/src/server/agent/provider-refresh-schedule.ts`), its tests, and its wiring in `packages/server/src/server/bootstrap.ts` and `packages/server/src/server/agent/provider-snapshot-manager.ts`.
 Provider catalogs are now discovered on first use and refreshed only when the user asks.
+
+### Support `extends` for plugin-registered providers
+
+Upstream only allowed `agents.providers.<id>.extends` to target hardcoded built-in providers and `"acp"`, so extending a plugin-registered provider such as `antigravity` failed config validation and registry resolution (#10676).
+Users wrapping plugin providers (for example with `bwrap` scripts) had to fall back to `extends: "acp"`, losing the plugin's icon, model/thinking grouping, and ACP tool transformers.
+
+**Change:** `packages/protocol/src/provider-config.ts` adds `"antigravity"` to `validExtendsValues`.
+`buildProviderRegistry` (`packages/server/src/server/agent/provider-registry.ts`) builds providers derived from a plugin through that plugin's client factory; built-in derivation is unchanged.
+`ProviderSnapshotManager` (`packages/server/src/server/agent/provider-snapshot-manager.ts`) defers an `extends` entry until its base registers, rebuilds derived providers when their plugin reloads, and warns when a base never registers.

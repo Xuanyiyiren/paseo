@@ -480,6 +480,26 @@ describe("provider overrides (new format)", () => {
     expect(result.success).toBe(false);
   });
 
+  test("extends antigravity → valid", () => {
+    const parsed = PersistedConfigSchema.parse({
+      agents: {
+        providers: {
+          "antigravity-bwrap": {
+            extends: "antigravity",
+            label: "Antigravity (bwrap)",
+            command: ["/usr/local/bin/bwrap-agy.sh"],
+          },
+        },
+      },
+    });
+
+    expect(parsed.agents?.providers?.["antigravity-bwrap"]).toEqual({
+      extends: "antigravity",
+      label: "Antigravity (bwrap)",
+      command: ["/usr/local/bin/bwrap-agy.sh"],
+    });
+  });
+
   test("extends unknown provider → error", () => {
     const result = PersistedConfigSchema.safeParse({
       agents: {

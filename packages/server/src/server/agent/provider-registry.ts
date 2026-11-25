@@ -68,7 +68,10 @@ export { AGENT_PROVIDER_DEFINITIONS, getAgentProviderDefinition };
 
 export interface ProviderDefinition extends AgentProviderDefinition {
   /** Effective inputs after overrides and inheritance; plugin registrations are owned separately. */
-  configuration: Omit<ResolvedProvider, "createBaseClient" | "contract"> | null;
+  configuration: Omit<
+    ResolvedProvider,
+    "createBaseClient" | "createClientFactory" | "contract"
+  > | null;
   iconSvg?: string;
   enabled: boolean;
   /**
@@ -120,6 +123,7 @@ export interface RegisteredProviderDefinition extends AgentProviderDefinition {
 
 export interface BuildProviderRegistryOptions {
   pluginProviders?: Record<string, RegisteredProviderDefinition>;
+  deferUnresolvedExtends?: boolean;
   runtimeSettings?: AgentProviderRuntimeSettingsMap;
   providerOverrides?: Record<string, ProviderOverride>;
   workspaceGitService?: Pick<WorkspaceGitService, "resolveRepoRoot">;
@@ -147,8 +151,10 @@ type ProviderClientFactory = (
   options?: ProviderClientFactoryOptions,
 ) => AgentClient;
 
+type ResolvedProviderDefinition = AgentProviderDefinition & { iconSvg?: string };
+
 interface ResolvedProvider {
-  definition: AgentProviderDefinition;
+  definition: ResolvedProviderDefinition;
   runtimeSettings?: ProviderRuntimeSettings;
   profileModels: ProviderProfileModel[];
   additionalModels: ProviderProfileModel[];
@@ -157,6 +163,7 @@ interface ResolvedProvider {
   derivedFromProviderId: string | null;
   providerOptions?: ProviderOptions;
   createBaseClient: (logger: Logger) => AgentClient;
+  createClientFactory?: ProviderClientFactory;
   contract: ProviderContract;
 }
 
@@ -319,9 +326,9 @@ function mergeRuntimeSettings(
 }
 
 function applyOverrideToDefinition(
-  definition: AgentProviderDefinition,
+  definition: ResolvedProviderDefinition,
   override?: ProviderOverride,
-): AgentProviderDefinition {
+): ResolvedProviderDefinition {
   if (!override) {
     return definition;
   }
@@ -335,9 +342,9 @@ function applyOverrideToDefinition(
 
 function createDerivedDefinition(
   providerId: string,
-  baseDefinition: AgentProviderDefinition,
+  baseDefinition: ResolvedProviderDefinition,
   override: ProviderOverride,
-): AgentProviderDefinition {
+): ResolvedProviderDefinition {
   if (!override.label) {
     throw new Error(`Custom provider '${providerId}' requires a label`);
   }
@@ -763,7 +770,12 @@ function createRegistryEntry(
     return { discovered: true, catalog };
   };
 
-  const { createBaseClient: _createBaseClient, contract: _contract, ...configuration } = resolved;
+  const {
+    createBaseClient: _createBaseClient,
+    createClientFactory: _createClientFactory,
+    contract: _contract,
+    ...configuration
+  } = resolved;
   return {
     ...resolved.definition,
     catalogRefresh:
@@ -819,7 +831,7 @@ function createResolvedProviderClient(
 }
 
 interface RegisteredProvider {
-  definition: AgentProviderDefinition;
+  definition: ResolvedProviderDefinition;
   createClient: ProviderClientFactory;
   contract: ProviderContract;
   runtimeSettings?: ProviderRuntimeSettings;
@@ -885,7 +897,10 @@ function buildResolvedBuiltinProviders(
 function addDerivedProviders(
   resolvedProviders: Map<string, ResolvedProvider>,
   providerOverrides: Record<string, ProviderOverride>,
-  options: Pick<BuildProviderRegistryOptions, "managedProcesses" | "openCodeBridge">,
+  options: Pick<
+    BuildProviderRegistryOptions,
+    "managedProcesses" | "openCodeBridge" | "deferUnresolvedExtends"
+  >,
 ): void {
   for (const [providerId, override] of Object.entries(providerOverrides)) {
     if (resolvedProviders.has(providerId) || BUILTIN_PROVIDER_IDS.includes(providerId)) {
@@ -956,6 +971,10 @@ function addDerivedProviders(
     const baseProviderId = override.extends;
     const baseProvider = resolvedProviders.get(baseProviderId);
     if (!baseProvider) {
+      // FORK(plugin-extends): a plugin base registers after config loads; wait for it.
+      if (options.deferUnresolvedExtends) {
+        continue;
+      }
       throw new Error(
         `Custom provider '${providerId}' extends unknown provider '${baseProviderId}'`,
       );
@@ -966,7 +985,9 @@ function addDerivedProviders(
       toRuntimeSettings(override),
     );
     const baseDefinition = baseProvider.definition;
-    const baseFactory = getProviderClientFactory(baseProviderId);
+    // FORK(plugin-extends): plugin bases carry their own factory.
+    const baseFactory =
+      baseProvider.createClientFactory ?? getProviderClientFactory(baseProviderId);
     const providerOptions = configuredProviderOptions(override) ?? baseProvider.providerOptions;
 
     resolvedProviders.set(providerId, {
@@ -1021,9 +1042,8 @@ export function buildProviderRegistry(
       logger.warn({ provider }, "Plugin provider shadowed by configured provider");
       continue;
     }
-    resolvedProviders.set(
-      provider,
-      resolveRegisteredProvider({
+    resolvedProviders.set(provider, {
+      ...resolveRegisteredProvider({
         definition,
         override,
         runtimeSettings: runtimeSettings?.[provider],
@@ -1033,12 +1053,11 @@ export function buildProviderRegistry(
           supportsLaunchWrap: definition.supportsLaunchWrap,
         },
       }),
-    );
+      // FORK(plugin-extends): derived providers have no built-in factory for a plugin id.
+      createClientFactory: definition.createClient,
+    });
   }
-  addDerivedProviders(resolvedProviders, providerOverrides, {
-    managedProcesses: options?.managedProcesses,
-    openCodeBridge: options?.openCodeBridge,
-  });
+  addDerivedProviders(resolvedProviders, providerOverrides, options ?? {});
 
   return Object.fromEntries(
     [...resolvedProviders.entries()].map(([provider, resolved]) => [

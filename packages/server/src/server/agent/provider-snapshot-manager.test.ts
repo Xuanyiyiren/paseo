@@ -3952,6 +3952,162 @@ describe("plugin provider overrides and launch", () => {
       manager.destroy();
     }
   });
+
+  test("extends a plugin-registered provider across startup, disabled base, and plugin reload", async () => {
+    const icon = '<svg viewBox="0 0 16 16"><path d="M0 0h16v16H0z" /></svg>';
+    const createAntigravityRegistration = () => {
+      const launches: Array<ProviderLaunch | undefined> = [];
+      const registration: ProviderRegistration = {
+        id: "antigravity",
+        label: "Antigravity",
+        icon,
+        command: [process.execPath, "default-agy.js"],
+        async status({ launch }) {
+          return { available: launch?.env.DBUS_SESSION_BUS_ADDRESS === "" };
+        },
+        async connect(request) {
+          launches.push(request.launch);
+          let listener: ((event: ProviderEvent) => void) | undefined;
+          return {
+            version: 1,
+            capabilities: ["session.persistence"],
+            async send(input) {
+              if (input.type !== "catalog") return;
+              listener?.({
+                type: "catalog",
+                requestId: input.requestId,
+                catalog: {
+                  models: [
+                    {
+                      id: "gemini-3-pro",
+                      label: "Gemini 3 Pro",
+                      thinkingOptions: [
+                        { id: "low", label: "Low" },
+                        { id: "high", label: "High", isDefault: true },
+                      ],
+                      defaultThinkingOptionId: "high",
+                    },
+                  ],
+                  modes: [{ id: "full-access", label: "Full access" }],
+                  defaultModeId: "full-access",
+                },
+              });
+            },
+            onEvent(next) {
+              listener = next;
+              return () => {
+                listener = undefined;
+              };
+            },
+            async close() {},
+          };
+        },
+      };
+      return { registration, launches };
+    };
+
+    const first = createAntigravityRegistration();
+    const second = createAntigravityRegistration();
+    const warnings: string[] = [];
+    const logger = pino(
+      { level: "warn" },
+      {
+        write(line: string) {
+          warnings.push(line);
+        },
+      },
+    );
+    const manager = new ProviderSnapshotManager({
+      logger,
+      providerOverrides: {
+        antigravity: { enabled: false, env: { DBUS_SESSION_BUS_ADDRESS: "" } },
+        "antigravity-bwrap": {
+          extends: "antigravity",
+          label: "Antigravity (bwrap)",
+          command: [process.execPath, "bwrap-agy.js"],
+        },
+      },
+    });
+    try {
+      expect(manager.hasProvider("antigravity-bwrap")).toBe(false);
+
+      manager.replacePluginProviders([first.registration]);
+      manager.settlePluginProviders();
+
+      expect(warnings).toEqual([]);
+      expect(manager.hasProvider("antigravity-bwrap")).toBe(true);
+      const entry = await manager.getProvider({ provider: "antigravity-bwrap", wait: true });
+      expect(entry).toMatchObject({
+        provider: "antigravity-bwrap",
+        label: "Antigravity (bwrap)",
+        iconSvg: icon,
+        status: "ready",
+        enabled: true,
+        models: [
+          {
+            provider: "antigravity-bwrap",
+            id: "gemini-3-pro",
+            label: "Gemini 3 Pro",
+            thinkingOptions: [
+              { id: "low", label: "Low" },
+              { id: "high", label: "High", isDefault: true },
+            ],
+            defaultThinkingOptionId: "high",
+          },
+        ],
+      });
+      expect(first.launches).toHaveLength(1);
+      expect(first.launches[0]).toMatchObject({
+        command: process.execPath,
+        args: ["bwrap-agy.js"],
+      });
+      expect(first.launches[0]?.env.DBUS_SESSION_BUS_ADDRESS).toBe("");
+
+      const reloadedState = manager.replacePluginProviders([second.registration]);
+      expect(reloadedState.retiredProviders).toContain("antigravity");
+      expect(reloadedState.retiredProviders).toContain("antigravity-bwrap");
+      await manager.getProvider({ provider: "antigravity-bwrap", wait: true });
+      expect(second.launches).toHaveLength(1);
+    } finally {
+      await manager.shutdown();
+      manager.destroy();
+    }
+  });
+
+  test("warns after plugin startup settles when an extends target never registers", async () => {
+    const warnings: string[] = [];
+    const logger = pino(
+      { level: "warn" },
+      {
+        write(line: string) {
+          warnings.push(line);
+        },
+      },
+    );
+    const manager = new ProviderSnapshotManager({
+      logger,
+      providerOverrides: {
+        "antigravity-bwrap": {
+          extends: "antigravity",
+          label: "Antigravity (bwrap)",
+          command: [process.execPath],
+        },
+      },
+    });
+    try {
+      expect(warnings).toEqual([]);
+      manager.settlePluginProviders();
+      expect(warnings).toHaveLength(1);
+      expect(JSON.parse(warnings[0]!)).toMatchObject({
+        provider: "antigravity-bwrap",
+        extends: "antigravity",
+        msg: "Custom provider extends no registered provider",
+      });
+    } finally {
+      await manager.shutdown();
+      manager.destroy();
+    }
+  });
 });
 
 test("model overrides preserve negotiated plugin capabilities and connection shutdown", async () => {

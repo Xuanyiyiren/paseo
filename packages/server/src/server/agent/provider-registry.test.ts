@@ -1115,6 +1115,116 @@ test("extension inherits base override — override claude command, zai extends 
   ).toBe(true);
 });
 
+test("extends a plugin-registered provider and preserves icon, thinking options, and merged runtime settings", async () => {
+  const receivedSettings: Array<unknown> = [];
+  const iconSvg = '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" /></svg>';
+  const pluginClient: AgentClient = {
+    provider: "antigravity",
+    capabilities: {
+      supportsStreaming: true,
+      supportsSessionPersistence: true,
+      supportsDynamicModes: true,
+      supportsMcpServers: true,
+      supportsReasoningStream: true,
+      supportsToolInvocations: true,
+    },
+    async createSession(): Promise<never> {
+      throw new Error("not implemented");
+    },
+    async resumeSession(): Promise<never> {
+      throw new Error("not implemented");
+    },
+    async fetchCatalog(): Promise<ProviderCatalog> {
+      return {
+        models: [
+          {
+            provider: "antigravity",
+            id: "gemini-3-pro",
+            label: "Gemini 3 Pro",
+            thinkingOptions: [
+              { id: "low", label: "Low" },
+              { id: "high", label: "High", isDefault: true },
+            ],
+            defaultThinkingOptionId: "high",
+          },
+        ],
+        modes: [{ id: "full-access", label: "Full access" }],
+        defaultModeId: "full-access",
+      };
+    },
+    async isAvailable(): Promise<boolean> {
+      return true;
+    },
+  };
+
+  const registry = buildProviderRegistry(logger, {
+    pluginProviders: {
+      antigravity: {
+        id: "antigravity",
+        label: "Antigravity",
+        description: "Antigravity CLI on your host",
+        iconSvg,
+        docsUrl: "https://paseo.sh/docs/supported-providers/antigravity#troubleshooting",
+        defaultModeId: null,
+        modes: [],
+        supportsExactMcpPreapproval: true,
+        supportsLaunchWrap: true,
+        createClient: (_logger, runtimeSettings) => {
+          receivedSettings.push(runtimeSettings);
+          return pluginClient;
+        },
+      },
+    },
+    providerOverrides: {
+      antigravity: {
+        enabled: false,
+        env: { DBUS_SESSION_BUS_ADDRESS: "" },
+      },
+      "antigravity-bwrap": {
+        extends: "antigravity",
+        label: "Antigravity (bwrap)",
+        command: ["/opt/bwrapAgyPaseo.sh"],
+      },
+    },
+  });
+
+  expect(registry.antigravity.enabled).toBe(false);
+  expect(registry["antigravity-bwrap"]).toMatchObject({
+    id: "antigravity-bwrap",
+    label: "Antigravity (bwrap)",
+    description: "Antigravity CLI on your host",
+    iconSvg,
+    docsUrl: "https://paseo.sh/docs/supported-providers/antigravity#troubleshooting",
+    enabled: true,
+    derivedFromProviderId: "antigravity",
+    supportsExactMcpPreapproval: true,
+    supportsLaunchWrap: true,
+  });
+
+  const catalog = await registry["antigravity-bwrap"].fetchCatalog({
+    scope: "global",
+    force: false,
+  });
+  expect(catalog.models).toEqual([
+    {
+      provider: "antigravity-bwrap",
+      id: "gemini-3-pro",
+      label: "Gemini 3 Pro",
+      thinkingOptions: [
+        { id: "low", label: "Low" },
+        { id: "high", label: "High", isDefault: true },
+      ],
+      defaultThinkingOptionId: "high",
+    },
+  ]);
+  expect(catalog.modes).toEqual([{ id: "full-access", label: "Full access" }]);
+  expect(receivedSettings).toContainEqual({
+    command: { mode: "replace", argv: ["/opt/bwrapAgyPaseo.sh"] },
+    env: { DBUS_SESSION_BUS_ADDRESS: "" },
+    disallowedTools: undefined,
+  });
+});
+
 describe("model merging", () => {
   test("profile models replace runtime models", async () => {
     mockState.runtimeModels.set("codex", [
