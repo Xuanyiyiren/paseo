@@ -261,3 +261,52 @@ Users wrapping plugin providers (for example with `bwrap` scripts) had to fall b
 **Change:** `packages/protocol/src/provider-config.ts` adds `"antigravity"` to `validExtendsValues`.
 `buildProviderRegistry` (`packages/server/src/server/agent/provider-registry.ts`) builds providers derived from a plugin through that plugin's client factory; built-in derivation is unchanged.
 `ProviderSnapshotManager` (`packages/server/src/server/agent/provider-snapshot-manager.ts`) defers an `extends` entry until its base registers, rebuilds derived providers when their plugin reloads, and warns when a base never registers.
+
+## How to use this fork
+
+Build the daemon and CLI from this repository and use them in place of the npm-installed `@getpaseo/cli`.
+The build keeps using `~/.paseo` and port `6767`, so your existing config and agents carry over.
+
+Clone and build first; your current daemon keeps running meanwhile.
+
+```bash
+git clone https://github.com/Xuanyiyiren/paseo.git
+cd paseo
+npm ci
+npm run build:server
+npm run build:daemon-web-ui   # only if you open the web UI at http://localhost:6767/
+```
+
+If you installed Paseo from npm, stop its daemon and uninstall it.
+Stop first, because `paseo daemon stop` still runs from the npm package.
+
+```bash
+paseo daemon stop
+npm uninstall -g @getpaseo/cli
+```
+
+Link this build's CLI and start the daemon.
+
+```bash
+ln -s "$PWD/packages/cli/bin/paseo" ~/.local/bin/paseo   # ~/.local/bin must be on PATH
+paseo daemon start
+```
+
+After each `git pull`, rerun the build steps and `paseo daemon restart`.
+
+To run your own wrapped `agy` alongside the default Antigravity, add to `~/.paseo/config.json`:
+
+```json
+"agents": {
+  "providers": {
+    "antigravity-custom": {
+      "extends": "antigravity",
+      "label": "Antigravity (custom)",
+      "command": ["/path/to/your-agy-wrapper", "acp"]
+    }
+  }
+}
+```
+
+`command` replaces the plugin default `agy acp`, so repeat its arguments after your wrapper.
+Keep `acp` in `command`; the plugin runs everything before it with `--version` to read the version.
